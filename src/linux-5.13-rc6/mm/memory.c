@@ -73,6 +73,7 @@
 #include <linux/perf_event.h>
 #include <linux/ptrace.h>
 #include <linux/vmalloc.h>
+#include <linux/nomad.h>
 
 #include <trace/events/kmem.h>
 
@@ -80,6 +81,7 @@
 #include <asm/mmu_context.h>
 #include <asm/pgalloc.h>
 #include <linux/uaccess.h>
+#include <linux/types.h>
 #include <asm/tlb.h>
 #include <asm/tlbflush.h>
 
@@ -108,6 +110,18 @@ EXPORT_SYMBOL(mem_map);
  */
 void *high_memory;
 EXPORT_SYMBOL(high_memory);
+
+struct async_promote_ctrl async_mod_glob_ctrl = {
+	.initialized = 0,
+	.queue_page_fault = NULL,
+
+	.link_shadow_page = NULL,
+	.demote_shadow_page_find = NULL,
+	.demote_shadow_page_breakup = NULL,
+	.release_shadow_page = NULL,
+	.reclaim_page = NULL,
+};
+EXPORT_SYMBOL(async_mod_glob_ctrl);
 
 /*
  * Randomize the address space (stacks, mmaps, brk, etc.).
@@ -2852,6 +2866,9 @@ static inline void wp_page_reuse(struct vm_fault *vmf)
 	flush_cache_page(vma, vmf->address, pte_pfn(vmf->orig_pte));
 	entry = pte_mkyoung(vmf->orig_pte);
 	entry = maybe_mkwrite(pte_mkdirty(entry), vma);
+	if(pte_orig_writable(entry)){
+		entry = pte_clear_orig_writable(entry);
+	}
 	if (ptep_set_access_flags(vma, vmf->address, vmf->pte, entry, 1))
 		update_mmu_cache(vma, vmf->address, vmf->pte);
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
@@ -2941,7 +2958,9 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		entry = mk_pte(new_page, vma->vm_page_prot);
 		entry = pte_sw_mkyoung(entry);
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
-
+		if (pte_orig_writable(entry)) {
+			entry = pte_clear_orig_writable(entry);
+		}
 		/*
 		 * Clear the pte entry and flush it first, before updating the
 		 * pte with the new entry, to keep TLBs on different CPUs in
@@ -3135,7 +3154,13 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	__releases(vmf->ptl)
 {
 	struct vm_area_struct *vma = vmf->vma;
-
+	struct page *shadow_page = NULL;
+	struct counter_tuple{
+		atomic64_t *wp_counter_ptr;
+		atomic64_t *cow_counter_ptr;
+	};
+	struct counter_tuple counters = { .wp_counter_ptr = NULL,
+					  .cow_counter_ptr = NULL };
 	if (userfaultfd_pte_wp(vma, *vmf->pte)) {
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 		return handle_userfault(vmf, VM_UFFD_WP);
@@ -3173,6 +3198,24 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	if (PageAnon(vmf->page)) {
 		struct page *page = vmf->page;
 
+
+		/**
+		 * whether this is a write to a shadow page write protected
+		 * page or a COW page, we should release the shadow page, if any
+		 * 1. for a WP page because of shadow paging, definitely we release it
+		 * 2. for a COW page, not sure about why. but at least it doesn't make
+		 * correctness worse.
+		*/
+		if (async_mod_glob_ctrl.initialized) {
+			if (async_mod_glob_ctrl.release_shadow_page) {
+				shadow_page =
+					async_mod_glob_ctrl.release_shadow_page(
+						page, &counters, true);
+			} else {
+				BUG();
+			}
+		}
+
 		/* PageKsm() doesn't necessarily raise the page refcount */
 		if (PageKsm(page) || page_count(page) != 1)
 			goto copy;
@@ -3189,6 +3232,11 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 		 */
 		unlock_page(page);
 		wp_page_reuse(vmf);
+		if (counters.wp_counter_ptr) {
+			atomic64_inc(counters.wp_counter_ptr);
+		}
+		if (shadow_page)
+			put_page(shadow_page);
 		return VM_FAULT_WRITE;
 	} else if (unlikely((vma->vm_flags & (VM_WRITE|VM_SHARED)) ==
 					(VM_WRITE|VM_SHARED))) {
@@ -3201,6 +3249,11 @@ copy:
 	get_page(vmf->page);
 
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	if (shadow_page)
+		put_page(shadow_page);
+	if (counters.cow_counter_ptr) {
+		atomic64_inc(counters.cow_counter_ptr);
+	}
 	return wp_page_copy(vmf);
 }
 
@@ -4123,6 +4176,7 @@ static vm_fault_t do_fault(struct vm_fault *vmf)
 	return ret;
 }
 
+
 static int numa_migrate_prep(struct page *page, struct vm_area_struct *vma,
 				unsigned long addr, int page_nid,
 				int *flags)
@@ -4135,7 +4189,7 @@ static int numa_migrate_prep(struct page *page, struct vm_area_struct *vma,
 		*flags |= TNF_FAULT_LOCAL;
 	}
 
-	return mpol_misplaced(page, vma, addr);
+	return mpol_misplaced(page, vma, addr, *flags);
 }
 
 static vm_fault_t do_numa_page(struct vm_fault *vmf)
@@ -4193,8 +4247,30 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 
 	last_cpupid = page_cpupid_last(page);
 	page_nid = page_to_nid(page);
-	target_nid = numa_migrate_prep(page, vma, vmf->address, page_nid,
-			&flags);
+
+	if (async_mod_glob_ctrl.queue_page_fault) {
+		int nid = 0;
+		if (page_nid == numa_node_id()) {
+			count_vm_numa_event(NUMA_HINT_FAULTS_LOCAL);
+			flags |= TNF_FAULT_LOCAL;
+		}
+		nid = mpol_misplaced(page, vma, vmf->address, flags);
+		async_mod_glob_ctrl.queue_page_fault(page, vmf->pte, nid);
+		goto out_map;
+	}
+
+	if (numa_promotion_tiered_enabled && !node_is_toptier(page_nid) &&
+	    !PageActive(page)) {
+		count_vm_numa_event(NUMA_HINT_FAULTS);
+		if (page_nid == numa_node_id())
+			count_vm_numa_event(NUMA_HINT_FAULTS_LOCAL);
+		mark_page_accessed(page);
+		pte_unmap_unlock(vmf->pte, vmf->ptl);
+		goto out;
+	}
+
+	target_nid =
+		numa_migrate_prep(page, vma, vmf->address, page_nid, &flags);
 	if (target_nid == NUMA_NO_NODE) {
 		put_page(page);
 		goto out_map;
@@ -4215,7 +4291,6 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 		}
 		goto out_map;
 	}
-
 out:
 	if (page_nid != NUMA_NO_NODE)
 		task_numa_fault(last_cpupid, page_nid, 1, flags);
@@ -4313,7 +4388,8 @@ static vm_fault_t wp_huge_pud(struct vm_fault *vmf, pud_t orig_pud)
  * The mmap_lock may have been released depending on flags and our return value.
  * See filemap_fault() and __lock_page_or_retry().
  */
-static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
+static vm_fault_t
+handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
 
@@ -4373,10 +4449,13 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 	if (!pte_present(vmf->orig_pte))
 		return do_swap_page(vmf);
-
+	// // expanded definition of NUMA pages, to keep two copies of read-only page
+	// // we some times tag the page as read-only
+	// if ((pte_protnone(vmf->orig_pte) || !pte_write(vmf->orig_pte)) &&
+	//     vma_is_accessible(vmf->vma))
+	// 	return do_numa_page(vmf);
 	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma))
 		return do_numa_page(vmf);
-
 	vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
 	spin_lock(vmf->ptl);
 	entry = vmf->orig_pte;
@@ -4432,7 +4511,7 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	pgd_t *pgd;
 	p4d_t *p4d;
 	vm_fault_t ret;
-
+	mm->cpu_trap_nr += 1;
 	pgd = pgd_offset(mm, address);
 	p4d = p4d_alloc(mm, pgd, address);
 	if (!p4d)

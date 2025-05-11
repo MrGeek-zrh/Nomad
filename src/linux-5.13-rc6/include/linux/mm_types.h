@@ -576,7 +576,7 @@ struct mm_struct {
 		u32 pasid;
 #endif
 	} __randomize_layout;
-
+	unsigned long cpu_trap_nr;
 	/*
 	 * The mm_cpumask needs to be at the end of mm_struct, because it
 	 * is dynamically sized based on nr_cpu_ids.

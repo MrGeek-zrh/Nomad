@@ -11,6 +11,7 @@
 #include <linux/rwsem.h>
 #include <linux/memcontrol.h>
 #include <linux/highmem.h>
+#include <linux/nomad2.h>
 
 /*
  * The anon_vma heads a list of private "related" vmas, to scan if
@@ -188,6 +189,8 @@ static inline void page_dup_rmap(struct page *page, bool compound)
 	atomic_inc(compound ? compound_mapcount_ptr(page) : &page->_mapcount);
 }
 
+
+
 /*
  * Called from mm/vmscan.c to handle paging out
  */
@@ -195,7 +198,8 @@ int page_referenced(struct page *, int is_locked,
 			struct mem_cgroup *memcg, unsigned long *vm_flags);
 
 bool try_to_unmap(struct page *, enum ttu_flags flags);
-
+bool demotion_try_to_unmap(struct page *, enum ttu_flags flags,
+			   struct demote_shadow_page_context *context);
 /* Avoid racy checks */
 #define PVMW_SYNC		(1 << 0)
 /* Look for migarion entries rather than present PTEs */

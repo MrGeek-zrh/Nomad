@@ -137,6 +137,11 @@ enum pageflags {
 #endif
 #ifdef CONFIG_64BIT
 	PG_arch_2,
+#ifdef CONFIG_NUMA_BALANCING
+	PG_demoted,
+	PG_numa_queued, /* The page is queued for NUMA promotion */
+	PG_shadowed,
+#endif
 #endif
 	__NR_PAGEFLAGS,
 
@@ -441,6 +446,20 @@ TESTPAGEFLAG(Young, young, PF_ANY)
 SETPAGEFLAG(Young, young, PF_ANY)
 TESTCLEARFLAG(Young, young, PF_ANY)
 PAGEFLAG(Idle, idle, PF_ANY)
+#endif
+
+#if defined(CONFIG_NUMA_BALANCING) && defined(CONFIG_64BIT)
+TESTPAGEFLAG(Demoted, demoted, PF_NO_TAIL)
+SETPAGEFLAG(Demoted, demoted, PF_NO_TAIL)
+TESTCLEARFLAG(Demoted, demoted, PF_NO_TAIL)
+TESTPAGEFLAG(PromQueued, numa_queued, PF_NO_TAIL)
+SETPAGEFLAG(PromQueued, numa_queued, PF_NO_TAIL)
+TESTCLEARFLAG(PromQueued, numa_queued, PF_NO_TAIL)
+CLEARPAGEFLAG(PromQueued, numa_queued, PF_NO_TAIL)
+TESTPAGEFLAG(Shadowed, shadowed, PF_NO_TAIL)
+SETPAGEFLAG(Shadowed, shadowed, PF_NO_TAIL)
+TESTCLEARFLAG(Shadowed, shadowed, PF_NO_TAIL)
+CLEARPAGEFLAG(Shadowed, shadowed, PF_NO_TAIL)
 #endif
 
 /*

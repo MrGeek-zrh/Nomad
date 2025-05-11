@@ -37,6 +37,7 @@
 #include <linux/page_idle.h>
 #include <linux/local_lock.h>
 #include <linux/buffer_head.h>
+#include <linux/nomad.h>
 
 #include "internal.h"
 
@@ -113,6 +114,14 @@ static void __put_compound_page(struct page *page)
 
 void __put_page(struct page *page)
 {
+	// this function is called when the ref count
+	// of a page is dropped to 0, we check if it has
+	// a shadow page and release it
+	if (async_mod_glob_ctrl.initialized &&
+	    async_mod_glob_ctrl.release_shadow_page) {
+		async_mod_glob_ctrl.release_shadow_page(page, NULL, false);
+	}
+
 	if (is_zone_device_page(page)) {
 		put_dev_pagemap(page->pgmap);
 
@@ -939,6 +948,11 @@ void release_pages(struct page **pages, int nr)
 
 		if (!put_page_testzero(page))
 			continue;
+		// this is a batch free page
+		if (async_mod_glob_ctrl.initialized &&
+		    async_mod_glob_ctrl.release_shadow_page) {
+			async_mod_glob_ctrl.release_shadow_page(page, NULL, false);
+		}
 
 		if (PageCompound(page)) {
 			if (lruvec) {
