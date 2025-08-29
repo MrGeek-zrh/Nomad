@@ -1007,7 +1007,7 @@ static int kmigraterd_promotion(pg_data_t *pgdat)
     if (htmm_cxl_mode)
     	cpumask = cpumask_of_node(pgdat->node_id);
     else
-	cpumask = cpumask_of_node(pgdat->node_id - 2);
+	cpumask = cpumask_of_node(pgdat->node_id - 1);
 
     if (!cpumask_empty(cpumask))
 	set_cpus_allowed_ptr(pgdat->kmigraterd, cpumask);
