@@ -19,6 +19,10 @@
 #include <linux/slab.h>
 #include <linux/pid.h>
 
+#include <linux/seq_file.h>
+#include <linux/proc_fs.h>
+#include <linux/spinlock.h>
+
 #include "../linux-5.13-rc6/mm/internal.h"
 #include "buffer_ring.h"
 
@@ -1069,6 +1073,24 @@ static void destroy_global_sync_ctrl(void)
 	async_mod_glob_ctrl.reclaim_page = NULL;
 }
 
+static void print_prmo(struct seq_file *m) {
+    seq_printf(m, "success_nr %lu\n", context.success_nr);
+    seq_printf(m, "retry_nr %lu\n", context.retry_nr);
+    seq_printf(m, "transactional_success_nr %lu\n", context.transactional_success_nr);
+    seq_printf(m, "transactional_fail_nr %lu\n", context.transactional_fail_nr);
+    seq_printf(m, "retreated_page_nr %lu\n", context.retreated_page_nr);
+    seq_printf(m, "try_to_promote_nr %lu\n", context.try_to_promote_nr);
+}
+
+static int perfnomad_show(struct seq_file *m, void *v) {
+    unsigned long flags;
+    spin_lock_irqsave(&context.info_lock, flags);
+    if (true)
+    print_prmo(m);
+    spin_unlock_irqrestore(&context.info_lock, flags);
+    return 0;
+}
+
 static int __init init_async_promote(void)
 {
 	int ret = 0;
@@ -1099,6 +1121,9 @@ static int __init init_async_promote(void)
 	if (ret) {
 		goto err_enable_promotion;
 	}
+
+	proc_create_single("perfnomad", 0, NULL, perfnomad_show);
+
 	return ret;
 
 err_enable_promotion:
@@ -1119,6 +1144,8 @@ err_init_interface:
 
 static void __exit exit_async_promote(void)
 {
+    remove_proc_entry("perfnomad", NULL);
+
 	destroy_global_sync_ctrl();
 
 	destroy_promotion_context(&context);
