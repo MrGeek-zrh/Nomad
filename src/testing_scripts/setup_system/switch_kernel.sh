@@ -23,15 +23,21 @@ if [ ! -e "$KERNEL_DIR/vmlinuz-$kernel_version" ]; then
     exit 1
 fi
 
-MID=`awk '/Advanced options.*/{print $(NF-1)}' /boot/grub/grub.cfg`
-MID="${MID//\'/}"
+MID=$(grep -F "submenu 'Advanced options for Ubuntu'" /boot/grub/grub.cfg | head -1 | awk '{print $(NF-1)}' | tr -d "'")
+if [ -z "$MID" ]; then
+    echo "无法找到 GRUB 高级菜单 ID" 1>&2
+    exit 1
+fi
 
-KID=`awk -v kern="with Linux $kernel_version" '$0 ~ kern && !/recovery/ { print $(NF - 1) }' /boot/grub/grub.cfg`
-KID="${KID//\'/}"
+KID=$(grep -F "menuentry 'Ubuntu, with Linux $kernel_version' " /boot/grub/grub.cfg | grep -v recovery | head -1 | awk '{print $(NF-1)}' | tr -d "'")
+if [ -z "$KID" ]; then
+    echo "无法找到与 $kernel_version 对应的 GRUB 菜单 ID" 1>&2
+    exit 1
+fi
 
 # update-grub
 
-sed -i "s/GRUB_DEFAULT=.*/GRUB_DEFAULT=\"$MID>$KID\"/" /etc/default/grub
+sed -i -E "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\"$MID>$KID\"|" /etc/default/grub
 
 
 if [ $kernel_version = "5.15.19-htmm" ];then
@@ -42,6 +48,16 @@ fi
 
 
 update-grub
+
+# Update saved_entry in grubenv to match GRUB_DEFAULT
+# This ensures the saved entry matches the kernel we want to boot
+saved_entry_text=$(grep -F "menuentry 'Ubuntu, with Linux $kernel_version' " /boot/grub/grub.cfg | grep -v recovery | head -1 | sed -E "s/.*menuentry '([^']*)'.*/\1/")
+if [ -n "$saved_entry_text" ]; then
+    grub-editenv - set "saved_entry=$saved_entry_text"
+    echo "Updated saved_entry to: $saved_entry_text"
+else
+    echo "Warning: Could not find saved_entry for kernel $kernel_version"
+fi
 
 echo -e "\e[31mPlease reboot machine\e[0m"
 
