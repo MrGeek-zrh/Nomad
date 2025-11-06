@@ -1,0 +1,74 @@
+diff --git a/train.c b/train.c
+index 6adf5c6..8967d06 100644
+--- a/train.c
++++ b/train.c
+@@ -6,6 +6,10 @@
+ #include <errno.h>
+ #include "linear.h"
+ #include <omp.h>
++#include <time.h>
++#include <unistd.h>
++#include <stdbool.h>
++#include <sys/stat.h>
+ #define Malloc(type,n) (type *)malloc((n)*sizeof(type))
+ #define INF HUGE_VAL
+ 
+@@ -112,8 +116,12 @@ int main(int argc, char **argv)
+ 	char input_file_name[1024];
+ 	char model_file_name[1024];
+ 	const char *error_msg;
+-
++	clock_t begin = clock(), end = begin;
++	bool allowed_to_run = false;
++	int dummy_data = 1234;
++	FILE* signal_file;
+ 	parse_command_line(argc, argv, input_file_name, model_file_name);
++	// prepare memory 
+ 	read_problem(input_file_name);
+ 	error_msg = check_parameter(&prob,&param);
+ 
+@@ -122,7 +130,30 @@ int main(int argc, char **argv)
+ 		fprintf(stderr,"ERROR: %s\n",error_msg);
+ 		exit(1);
+ 	}
+-
++	signal_file = fopen("/tmp/liblinear_initialized", "a");
++	if (!signal_file)
++	{
++		fprintf(stderr, "ERROR: %s, %d\n", __FILE__, __LINE__);
++		exit(1);
++	}
++	if (fwrite(&dummy_data, sizeof(dummy_data), 1, signal_file) != 1)
++	{
++		fprintf(stderr, "ERROR: %s, %d\n", __FILE__, __LINE__);
++		exit(1);
++	};
++	fclose(signal_file);
++	while (!allowed_to_run)
++	{
++		int err = 0;
++		struct stat buf;
++		err = stat("/tmp/liblinear_thrashed", &buf);
++		if(err == 0 && buf.st_size != 0){
++			allowed_to_run = true;
++		}else{
++			sleep(1);
++		}
++	}
++	begin = clock();
+ 	if (flag_find_parameters)
+ 	{
+ 		do_find_parameters();
+@@ -146,7 +177,11 @@ int main(int argc, char **argv)
+ 	free(prob.x);
+ 	free(x_space);
+ 	free(line);
+-
++	end = clock();
++	double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
++	printf("==================================");
++ 
++	printf("execution time %f (s)",time_spent);
+ 	return 0;
+ }
+ 

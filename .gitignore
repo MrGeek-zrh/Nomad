@@ -1,0 +1,9 @@
+.vscode
+*.model
+*.log
+*.rdb
+*.deb
+*.buildinfo
+*.changes
+*.data
+*.old
