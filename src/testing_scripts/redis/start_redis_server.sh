@@ -115,7 +115,7 @@ function func_main() {
 ################################ Main ##################################
 BENCH_DRAM=${FAST_TIER_MEMORY} # max memory for node 0 
 CONFIG_CXL_MODE=${MEMTIS_CXL_OPTION}
-thp_setting=always 
+thp_setting=never 
 
 BENCH_DRAM=${FAST_TIER_MEMORY} # max memory for node 0
 
@@ -129,7 +129,7 @@ fi
 mkdir -p ${results_DIR}
 BENCH_RUN="${redis_dir}/src/redis-server src/testing_scripts/redis/redis.conf"
 
-if [ `uname -r` = "5.15.19-htmm" ];then
+if [ `uname -r` = "5.15.19-phmm-new" ];then
 
     func_prepare
     func_main

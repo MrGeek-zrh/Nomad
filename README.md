@@ -165,6 +165,8 @@ apt-get install git fakeroot build-essential ncurses-dev xz-utils libssl-dev bc 
 ```
 You also need to install `cmake`, `gflags`, `glog` and `python` to compile our userspace program and generate the access pattern file.
 
+For Redis benchmark testing, you need to compile and install Redis 6.2.13. See [Redis Installation Guide](docs/redis_installation.md) for detailed instructions.
+
 ### Optional
 If you want to try Nomad or TPP in a virtual machine, you may need network access to the virtual machine.
 ```
